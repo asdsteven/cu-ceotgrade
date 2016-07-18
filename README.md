@@ -18,3 +18,6 @@ You may change smtpHost and smtpAddr if you want to use mail services other than
 ##Usage
 Deploy it to OpenShift to run 24 hours/day for free, and then use Uptime Robot to prevent it from sleeping.
 You may run it on your own computer too.
+
+##Running example
+[http://ceotgrade-asdsteven.rhcloud.com/](http://ceotgrade-asdsteven.rhcloud.com/)
