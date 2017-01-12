@@ -34,9 +34,21 @@ const (
 	loginSlt    = ".psloginbutton"
 	termSlt     = "#DERIVED_SSS_SCT_SSR_PB_GO"
 	icsidSlt    = `input[name="ICSID"]`
-	gradeSlt    = ".PABOLDTEXT"
+	titleSlt    = ".PSLEVEL1GRID .PSHYPERLINK a"
+	gradeSlt    = ".PSLEVEL1GRID .PABOLDTEXT"
 	telegramURL = "https://api.telegram.org/bot"
 )
+
+type update struct {
+	time  string
+	grade string
+}
+
+var newGrades = list.New()
+
+var grades = make(map[string]string)
+
+var hongKong *time.Location
 
 func login() error {
 	log.Println("login")
@@ -54,8 +66,8 @@ func login() error {
 	return nil
 }
 
-func selectTerm(icsid string) error {
-	res, err := http.PostForm(mainURL, url.Values{
+func selectTerm(icsid, term string) (*http.Response, error) {
+	return http.PostForm(mainURL, url.Values{
 		"ICType":                 {"Panel"},
 		"ICElementNum":           {"0"},
 		"ICStateNum":             {"1"},
@@ -68,45 +80,35 @@ func selectTerm(icsid string) error {
 		"ICResubmit":             {"0"},
 		"ICSID":                  {icsid},
 		"#ICDataLang":            {"ENG"},
-		"SSR_DUMMY_RECV1$sels$0": {"0"},
+		"SSR_DUMMY_RECV1$sels$0": {term},
 	})
+}
+
+func getGrade(icsid, term string) (string, error) {
+	res, err := selectTerm(icsid, term)
 	if err != nil {
-		return err
+		return "", err
 	}
 	doc, err := goquery.NewDocumentFromResponse(res)
-	e := doc.Find(gradeSlt)
-	if e.Length() != 0 {
-		return updateGrade(strings.Replace(e.Text(), "\u00a0", "_", -1))
+	f := func (_ int, s *goquery.Selection) string {
+		return strings.Replace(s.Text(), "\u00a0", "_", -1)
 	}
-	return errors.New("no grade after term")
+	title := doc.Find(titleSlt).Map(f)
+	grade := doc.Find(gradeSlt).Map(f)
+	var s []string
+	for i := 0; i < len(title) && i < len(grade); i++ {
+		if grades[term + title[i]] != grade[i] {
+			grades[term + title[i]] = grade[i]
+			s = append(s, fmt.Sprintf("%s: %s\n", title[i], grade[i]))
+		}
+	}
+	return strings.Join(s, ""), nil
 }
-
-type update struct {
-	time  string
-	grade string
-}
-
-var newGrades = list.New()
-
-var grades = list.New()
-
-var hongKong *time.Location
 
 func updateGrade(s string) error {
 	const format = "02 Jan 2006 15:04:05"
-	if grades.Back() != nil && grades.Back().Value.(update).grade == s {
-		grades.PushBack(update{time.Now().In(hongKong).Format(format), s})
-		if grades.Len() > 60 {
-			grades.Remove(grades.Front())
-		}
-		return nil
-	}
-	grades.PushBack(update{time.Now().In(hongKong).Format(format), s})
-	if grades.Len() > 20 {
-		grades.Remove(grades.Front())
-	}
 	newGrades.PushBack(update{time.Now().In(hongKong).Format(format), s})
-	log.Println("new grade:", s)
+	log.Println("new grades:", s)
 	if emailFlag {
 		if err := mail(s); err != nil {
 			return err
@@ -132,7 +134,7 @@ func mail(s string) error {
 func telegram(s string) error {
 	_, err := http.PostForm(telegramURL+bot_token+"/sendMessage", url.Values{
 		"chat_id": {chat_id},
-		"text":    {"Your grade: " + s},
+		"text":    {s},
 	})
 	return err
 }
@@ -154,8 +156,20 @@ func run() error {
 		if !exists {
 			return errors.New("no icsid")
 		}
-		return selectTerm(icsid)
-
+		var ss []string
+		terms := doc.Find(".PSLEVEL2GRIDWBO input").Length()
+		for term := 0; term < terms; term++ {
+			if s, err := getGrade(icsid, fmt.Sprint(term)); err == nil {
+				ss = append(ss, s)
+			} else {
+				return err
+			}
+		}
+		s := strings.Join(ss, "")
+		if len(s) != 0 {
+			return updateGrade(s)
+		}
+		return errors.New("no new grades")
 	}
 	html, err := doc.Html()
 	if err != nil {
@@ -175,11 +189,6 @@ func loop() {
 func home(res http.ResponseWriter, req *http.Request) {
 	fmt.Fprintln(res, "New Grades:")
 	for e := newGrades.Back(); e != nil; e = e.Prev() {
-		u := e.Value.(update)
-		fmt.Fprintln(res, "Time:", u.time, "Grades:", u.grade)
-	}
-	fmt.Fprintln(res, "\nUpdates:")
-	for e := grades.Back(); e != nil; e = e.Prev() {
 		u := e.Value.(update)
 		fmt.Fprintln(res, "Time:", u.time, "Grades:", u.grade)
 	}
