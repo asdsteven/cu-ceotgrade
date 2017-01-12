@@ -2,9 +2,11 @@ package main
 
 import (
 	"container/list"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/http/cookiejar"
@@ -12,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,7 +28,6 @@ const (
 	smtpHost     = "smtp.gmail.com"
 	smtpAddr     = "smtp.gmail.com:587"
 	bot_token    = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
-	chat_id      = "123456789"
 )
 
 const (
@@ -44,11 +46,15 @@ type update struct {
 	grade string
 }
 
+var mutex sync.Mutex
+
 var newGrades = list.New()
 
 var grades = make(map[string]string)
 
 var hongKong *time.Location
+
+var chat_ids = make(map[string]bool)
 
 func login() error {
 	log.Println("login")
@@ -90,15 +96,15 @@ func getGrade(icsid, term string) (string, error) {
 		return "", err
 	}
 	doc, err := goquery.NewDocumentFromResponse(res)
-	f := func (_ int, s *goquery.Selection) string {
+	f := func(_ int, s *goquery.Selection) string {
 		return strings.Replace(s.Text(), "\u00a0", "_", -1)
 	}
 	title := doc.Find(titleSlt).Map(f)
 	grade := doc.Find(gradeSlt).Map(f)
 	var s []string
 	for i := 0; i < len(title) && i < len(grade); i++ {
-		if grades[term + title[i]] != grade[i] {
-			grades[term + title[i]] = grade[i]
+		if grades[term+title[i]] != grade[i] {
+			grades[term+title[i]] = grade[i]
 			s = append(s, fmt.Sprintf("%s: %s\n", title[i], grade[i]))
 		}
 	}
@@ -115,7 +121,11 @@ func updateGrade(s string) error {
 		}
 	}
 	if telegramFlag {
-		if err := telegram(s); err != nil {
+		var err error
+		for chat_id := range chat_ids {
+			err = telegram(chat_id, s)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -131,8 +141,8 @@ func mail(s string) error {
 	return smtp.SendMail(smtpAddr, auth, email, []string{email}, msg)
 }
 
-func telegram(s string) error {
-	_, err := http.PostForm(telegramURL+bot_token+"/sendMessage", url.Values{
+func telegram(chat_id, s string) (err error) {
+	_, err = http.PostForm(telegramURL+bot_token+"/sendMessage", url.Values{
 		"chat_id": {chat_id},
 		"text":    {s},
 	})
@@ -167,9 +177,12 @@ func run() error {
 		}
 		s := strings.Join(ss, "")
 		if len(s) != 0 {
-			return updateGrade(s)
+			mutex.Lock()
+			err := updateGrade(s)
+			mutex.Unlock()
+			return err
 		}
-		return errors.New("no new grades")
+		return nil
 	}
 	html, err := doc.Html()
 	if err != nil {
@@ -188,10 +201,44 @@ func loop() {
 
 func home(res http.ResponseWriter, req *http.Request) {
 	fmt.Fprintln(res, "New Grades:")
+	mutex.Lock()
 	for e := newGrades.Back(); e != nil; e = e.Prev() {
 		u := e.Value.(update)
-		fmt.Fprintln(res, "Time:", u.time, "Grades:", u.grade)
+		fmt.Fprintln(res, "Time:", u.time, "Grades:\n", u.grade)
 	}
+	mutex.Unlock()
+}
+
+func newUser(res http.ResponseWriter, req *http.Request) {
+	body, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	t := new(struct {
+		Message struct {
+			From struct {
+				Id         int
+				First_name string
+				Last_name  string
+				Username   string
+			}
+		}
+	})
+	if err := json.Unmarshal(body, t); err != nil {
+		log.Println(err)
+		return
+	}
+	id := fmt.Sprint(t.Message.From.Id)
+	mutex.Lock()
+	if chat_ids[id] == false {
+		chat_ids[id] = true
+		telegram(id, "Hello, I will notify you whenever my grades are updated")
+	}
+	s := fmt.Sprintf("%s %s: %s", t.Message.From.First_name,
+		t.Message.From.Last_name, t.Message.From.Username)
+	mutex.Unlock()
+	log.Println(s)
 }
 
 func main() {
@@ -208,6 +255,7 @@ func main() {
 	}
 	go loop()
 	http.HandleFunc("/", home)
+	http.HandleFunc("/"+bot_token, newUser)
 	ip := os.Getenv("OPENSHIFT_GO_IP")
 	if ip == "" {
 		ip = "localhost"
