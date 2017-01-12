@@ -204,7 +204,8 @@ func home(res http.ResponseWriter, req *http.Request) {
 	mutex.Lock()
 	for e := newGrades.Back(); e != nil; e = e.Prev() {
 		u := e.Value.(update)
-		fmt.Fprintln(res, "Time:", u.time, "Grades:\n", u.grade)
+		fmt.Fprintln(res, "Time:", u.time, "Grades:")
+		fmt.Fprintln(res, u.grade)
 	}
 	mutex.Unlock()
 }
