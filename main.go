@@ -11,25 +11,31 @@ import (
 	"net/smtp"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
 const (
-	sid      = "1155012345"
-	pw       = "my password"
-	email    = "my gmail@gmail.com"
-	emailpw  = "my gmail pw"
-	smtpHost = "smtp.gmail.com"
-	smtpAddr = "smtp.gmail.com:587"
+	emailFlag    = false
+	telegramFlag = false
+	sid          = "1155012345"
+	pw           = "my password"
+	email        = "my gmail@gmail.com"
+	emailpw      = "my gmail pw"
+	smtpHost     = "smtp.gmail.com"
+	smtpAddr     = "smtp.gmail.com:587"
+	bot_token    = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+	chat_id      = "123456789"
 )
 
 const (
-	mainURL  = "https://cusis.cuhk.edu.hk/psc/csprd/CUHK/PSFT_HR/c/SA_LEARNER_SERVICES.SSR_SSENRL_GRADE.GBL"
-	loginURL = "https://cusis.cuhk.edu.hk/psc/csprd/CUHK/PSFT_HR/c/SA_LEARNER_SERVICES.SSR_SSENRL_GRADE.GBL?cmd=login&languageCd=ENG"
-	loginSlt = ".psloginbutton"
-	termSlt  = "#DERIVED_SSS_SCT_SSR_PB_GO"
-	icsidSlt = `input[name="ICSID"]`
-	gradeSlt = ".PABOLDTEXT"
+	mainURL     = "https://cusis.cuhk.edu.hk/psc/csprd/CUHK/PSFT_HR/c/SA_LEARNER_SERVICES.SSR_SSENRL_GRADE.GBL"
+	loginURL    = "https://cusis.cuhk.edu.hk/psc/csprd/CUHK/PSFT_HR/c/SA_LEARNER_SERVICES.SSR_SSENRL_GRADE.GBL?cmd=login&languageCd=ENG"
+	loginSlt    = ".psloginbutton"
+	termSlt     = "#DERIVED_SSS_SCT_SSR_PB_GO"
+	icsidSlt    = `input[name="ICSID"]`
+	gradeSlt    = ".PABOLDTEXT"
+	telegramURL = "https://api.telegram.org/bot"
 )
 
 func login() error {
@@ -70,7 +76,7 @@ func selectTerm(icsid string) error {
 	doc, err := goquery.NewDocumentFromResponse(res)
 	e := doc.Find(gradeSlt)
 	if e.Length() != 0 {
-		return updateGrade(e.Text())
+		return updateGrade(strings.Replace(e.Text(), "\u00a0", "_", -1))
 	}
 	return errors.New("no grade after term")
 }
@@ -101,7 +107,17 @@ func updateGrade(s string) error {
 	}
 	newGrades.PushBack(update{time.Now().In(hongKong).Format(format), s})
 	log.Println("new grade:", s)
-	return mail(s)
+	if emailFlag {
+		if err := mail(s); err != nil {
+			return err
+		}
+	}
+	if telegramFlag {
+		if err := telegram(s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func mail(s string) error {
@@ -111,6 +127,14 @@ func mail(s string) error {
 		"\r\n" +
 		"Your grade:" + s + "\r\n")
 	return smtp.SendMail(smtpAddr, auth, email, []string{email}, msg)
+}
+
+func telegram(s string) error {
+	_, err := http.PostForm(telegramURL+bot_token+"/sendMessage", url.Values{
+		"chat_id": {chat_id},
+		"text":    {"Your grade: " + s},
+	})
+	return err
 }
 
 func run() error {
